@@ -151,10 +151,11 @@ namespace monitor {
 
         auto core_cell(std::size_t index, double load) -> Element {
             return hbox({
-                text(std::format("{:>3} ", index)) | dim,
-                meter(load),
-                text(std::format("{:>4.0f}%", load)),
-            }) | flex;
+                       text(std::format("{:>3} ", index)) | dim,
+                       meter(load),
+                       text(std::format("{:>4.0f}%", load)),
+                   }) |
+                flex;
         }
 
         auto core_grid(std::vector<double> const& loads) -> Element {
@@ -228,9 +229,10 @@ namespace monitor {
 
         auto rate_series(RateSeries const& series) -> Element {
             return vbox({
-                hbox({ text(series.label) | color(series.tint), filler(), text(format_rate(series.value)) | bold }),
-                history_graph(series.history, RATE_SCALE_FLOOR) | color(series.tint),
-            }) | flex;
+                       hbox({ text(series.label) | color(series.tint), filler(), text(format_rate(series.value)) | bold }),
+                       history_graph(series.history, RATE_SCALE_FLOOR) | color(series.tint),
+                   }) |
+                flex;
         }
 
         auto rate_panel(Element panel_title, RateSeries const& upper, RateSeries const& lower) -> Element {
@@ -238,17 +240,13 @@ namespace monitor {
         }
 
         auto network_panel(MonitorState const& state) -> Element {
-            return rate_panel(title("网络"),
-                              { "↓ 接收", state.latest.net_receive, state.net_receive_history, Color::Green },
-                              { "↑ 发送", state.latest.net_send, state.net_send_history, Color::Red });
+            return rate_panel(title("网络"), { "↓ 接收", state.latest.net_receive, state.net_receive_history, Color::Green }, { "↑ 发送", state.latest.net_send, state.net_send_history, Color::Red });
         }
 
         auto disk_io_panel(MonitorState const& state) -> Element {
             auto const active{ state.latest.disk_active };
             auto detail{ text(std::format("活动 {:.0f}%", active)) | color(usage_color(active)) };
-            return rate_panel(title("磁盘 I/O", std::move(detail)),
-                              { "读取", state.latest.disk_read, state.disk_read_history, Color::Cyan },
-                              { "写入", state.latest.disk_write, state.disk_write_history, Color::Yellow });
+            return rate_panel(title("磁盘 I/O", std::move(detail)), { "读取", state.latest.disk_read, state.disk_read_history, Color::Cyan }, { "写入", state.latest.disk_write, state.disk_write_history, Color::Yellow });
         }
 
         auto drives_panel(MonitorState const& state) -> Element {
