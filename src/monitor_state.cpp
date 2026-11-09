@@ -1,6 +1,7 @@
-#include "monitor_state.hpp"
+#include "systop/monitor_state.hpp"
 
 #include <algorithm>
+#include <compare>
 #include <cstddef>
 #include <string_view>
 #include <tuple>
@@ -18,42 +19,37 @@ namespace monitor {
             return c;
         }
 
-        auto name_less(std::string_view lhs, std::string_view rhs) -> bool {
-            return std::ranges::lexicographical_compare(lhs, rhs, {}, to_lower_ascii, to_lower_ascii);
+        auto compare_names(std::string_view lhs, std::string_view rhs) -> std::strong_ordering {
+            return std::lexicographical_compare_three_way(lhs.begin(), lhs.end(), rhs.begin(), rhs.end(), [](char a, char b) {
+                return to_lower_ascii(a) <=> to_lower_ascii(b);
+            });
+        }
+
+        auto compare_by(SortKey key, ProcessUsage const& lhs, ProcessUsage const& rhs) -> std::partial_ordering {
+            switch (key) {
+                case SortKey::Cpu:
+                    return std::tie(lhs.cpu, lhs.memory) <=> std::tie(rhs.cpu, rhs.memory);
+                case SortKey::Memory:
+                    return lhs.memory <=> rhs.memory;
+                case SortKey::Name:
+                    return compare_names(lhs.name, rhs.name);
+                case SortKey::Pid:
+                    return lhs.pid <=> rhs.pid;
+            }
+            std::unreachable();
         }
 
         auto sort_processes(std::vector<ProcessUsage>& processes, SortKey key) -> void {
-            switch (key) {
-                case SortKey::Cpu:
-                    std::ranges::sort(processes, [](ProcessUsage const& lhs, ProcessUsage const& rhs) {
-                        return std::tie(rhs.cpu, rhs.memory, lhs.pid) < std::tie(lhs.cpu, lhs.memory, rhs.pid);
-                    });
-                    break;
-                case SortKey::Memory:
-                    std::ranges::sort(processes, [](ProcessUsage const& lhs, ProcessUsage const& rhs) {
-                        return std::tie(rhs.memory, lhs.pid) < std::tie(lhs.memory, rhs.pid);
-                    });
-                    break;
-                case SortKey::Name:
-                    std::ranges::sort(processes, [](ProcessUsage const& lhs, ProcessUsage const& rhs) {
-                        if (name_less(lhs.name, rhs.name)) {
-                            return true;
-                        }
-                        if (name_less(rhs.name, lhs.name)) {
-                            return false;
-                        }
-                        return lhs.pid < rhs.pid;
-                    });
-                    break;
-                case SortKey::Pid:
-                    std::ranges::sort(processes, {}, &ProcessUsage::pid);
-                    break;
-            }
+            std::ranges::sort(processes, [key](ProcessUsage const& lhs, ProcessUsage const& rhs) {
+                auto const order{ is_descending(key) ? compare_by(key, rhs, lhs) : compare_by(key, lhs, rhs) };
+                if (order != 0) {
+                    return order < 0;
+                }
+                return lhs.pid < rhs.pid;
+            });
         }
 
     } // namespace
-
-    MonitorState::MonitorState(StaticInfo static_info) : info{ std::move(static_info) } {}
 
     auto MonitorState::Apply(Snapshot snapshot) -> void {
         if (paused) {
@@ -92,16 +88,6 @@ namespace monitor {
         }
         selected = std::clamp(index, 0, static_cast<int>(latest.processes.size()) - 1);
         followed_pid = latest.processes[static_cast<std::size_t>(selected)].pid;
-    }
-
-    auto MonitorState::ChangeInterval(int step) -> void {
-        auto const last{ static_cast<int>(REFRESH_INTERVALS.size()) - 1 };
-        auto const next{ std::clamp(static_cast<int>(interval_index.load()) + step, 0, last) };
-        interval_index.store(static_cast<std::size_t>(next));
-    }
-
-    auto MonitorState::Interval() const -> std::chrono::milliseconds {
-        return REFRESH_INTERVALS[interval_index.load()];
     }
 
 } // namespace monitor

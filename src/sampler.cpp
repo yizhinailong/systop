@@ -1,4 +1,4 @@
-#include "sampler.hpp"
+#include "systop/sampler.hpp"
 
 #include <winsock2.h>
 #include <ws2ipdef.h>
@@ -16,7 +16,7 @@
 #include <cwchar>
 #include <format>
 #include <memory>
-#include <optional>
+#include <ratio>
 #include <span>
 #include <string>
 #include <string_view>
@@ -28,7 +28,8 @@ namespace monitor {
 
     namespace {
 
-        constexpr double TICKS_PER_SECOND{ 10'000'000.0 };
+        using FileTime = std::chrono::duration<std::int64_t, std::ratio<1, 10'000'000>>;
+
         constexpr unsigned long FIRST_WINDOWS_11_BUILD{ 22000 };
         constexpr NTSTATUS INFO_LENGTH_MISMATCH{ static_cast<NTSTATUS>(0xC0000004UL) };
         constexpr std::size_t INITIAL_PROCESS_BUFFER{ 512 * 1024 };
@@ -57,13 +58,15 @@ namespace monitor {
 
         struct CpuTimes {
             std::int64_t created{ 0 };
-            std::int64_t used{ 0 };
+            FileTime used{};
         };
 
         struct NetworkTotals {
             std::uint64_t received{ 0 };
             std::uint64_t sent{ 0 };
         };
+
+        using InterfaceTotals = std::unordered_map<std::uint64_t, NetworkTotals>;
 
         auto to_utf8(std::wstring_view text) -> std::string {
             if (text.empty()) {
@@ -132,6 +135,10 @@ namespace monitor {
             return to_utf8(trim(name));
         }
 
+        auto count_logical_cores() -> int {
+            return static_cast<int>(GetActiveProcessorCount(ALL_PROCESSOR_GROUPS));
+        }
+
         auto count_physical_cores() -> int {
             DWORD size{ 0 };
             GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &size);
@@ -147,13 +154,10 @@ namespace monitor {
             return cores;
         }
 
-        auto read_counter(PDH_HCOUNTER counter, DWORD format = PDH_FMT_DOUBLE) -> std::optional<double> {
-            if (counter == nullptr) {
-                return std::nullopt;
-            }
+        auto read_counter(PDH_HCOUNTER counter, double fallback = 0.0, DWORD format = PDH_FMT_DOUBLE) -> double {
             PDH_FMT_COUNTERVALUE value{};
-            if (PdhGetFormattedCounterValue(counter, format, nullptr, &value) != ERROR_SUCCESS) {
-                return std::nullopt;
+            if (counter == nullptr || PdhGetFormattedCounterValue(counter, format, nullptr, &value) != ERROR_SUCCESS) {
+                return fallback;
             }
             return value.doubleValue;
         }
@@ -174,29 +178,23 @@ namespace monitor {
             snapshot.handle_count = info.HandleCount;
         }
 
-        auto read_network_totals() -> NetworkTotals {
-            PMIB_IF_TABLE2 table{ nullptr };
-            if (GetIfTable2(&table) != NO_ERROR) {
+        auto read_interfaces() -> InterfaceTotals {
+            std::unique_ptr<MIB_IF_TABLE2, decltype(&FreeMibTable)> table{ nullptr, &FreeMibTable };
+            if (GetIfTable2(std::out_ptr(table)) != NO_ERROR) {
                 return {};
             }
-            NetworkTotals totals{};
+            InterfaceTotals interfaces;
             for (auto const& row : std::span{ table->Table, table->NumEntries }) {
                 auto const& flags{ row.InterfaceAndOperStatusFlags };
-                if (!flags.HardwareInterface || flags.FilterInterface || row.OperStatus != IfOperStatusUp) {
-                    continue;
+                if (flags.HardwareInterface && !flags.FilterInterface && row.OperStatus == IfOperStatusUp) {
+                    interfaces.emplace(row.InterfaceLuid.Value, NetworkTotals{ .received = row.InOctets, .sent = row.OutOctets });
                 }
-                totals.received += row.InOctets;
-                totals.sent += row.OutOctets;
             }
-            FreeMibTable(table);
-            return totals;
+            return interfaces;
         }
 
-        auto rate(std::uint64_t previous, std::uint64_t current, double seconds) -> double {
-            if (current < previous) {
-                return 0.0;
-            }
-            return static_cast<double>(current - previous) / seconds;
+        auto counter_delta(std::uint64_t before, std::uint64_t after) -> std::uint64_t {
+            return after >= before ? after - before : 0;
         }
 
         auto read_drives() -> std::vector<DriveUsage> {
@@ -228,7 +226,7 @@ namespace monitor {
 
         class PerformanceCounters {
         private:
-            PDH_HQUERY m_query{ nullptr };
+            std::unique_ptr<void, decltype(&PdhCloseQuery)> m_query{ nullptr, &PdhCloseQuery };
             PDH_HCOUNTER m_cpu_total{ nullptr };
             std::vector<PDH_HCOUNTER> m_cpu_cores;
             PDH_HCOUNTER m_cpu_frequency{ nullptr };
@@ -239,8 +237,7 @@ namespace monitor {
 
         public:
             PerformanceCounters() {
-                if (PdhOpenQueryW(nullptr, 0, &m_query) != ERROR_SUCCESS) {
-                    m_query = nullptr;
+                if (PdhOpenQueryW(nullptr, 0, std::out_ptr(m_query)) != ERROR_SUCCESS) {
                     return;
                 }
                 m_cpu_total = addCpuCounter(L"_Total");
@@ -256,41 +253,29 @@ namespace monitor {
                 m_disk_read = addCounter(L"\\PhysicalDisk(_Total)\\Disk Read Bytes/sec");
                 m_disk_write = addCounter(L"\\PhysicalDisk(_Total)\\Disk Write Bytes/sec");
                 m_disk_idle = addCounter(L"\\PhysicalDisk(_Total)\\% Idle Time");
-                PdhCollectQueryData(m_query);
+                PdhCollectQueryData(m_query.get());
             }
-
-            ~PerformanceCounters() {
-                if (m_query != nullptr) {
-                    PdhCloseQuery(m_query);
-                }
-            }
-
-            PerformanceCounters(PerformanceCounters const&) = delete;
-            auto operator=(PerformanceCounters const&) -> PerformanceCounters& = delete;
 
             auto Collect(Snapshot& snapshot) const -> void {
-                if (m_query == nullptr || PdhCollectQueryData(m_query) != ERROR_SUCCESS) {
+                if (m_query == nullptr || PdhCollectQueryData(m_query.get()) != ERROR_SUCCESS) {
                     return;
                 }
-                snapshot.cpu_total = read_counter(m_cpu_total).value_or(0.0);
+                snapshot.cpu_total = read_counter(m_cpu_total);
                 snapshot.cpu_cores.reserve(m_cpu_cores.size());
                 for (auto const counter : m_cpu_cores) {
-                    snapshot.cpu_cores.push_back(read_counter(counter).value_or(0.0));
+                    snapshot.cpu_cores.push_back(read_counter(counter));
                 }
-                auto const frequency{ read_counter(m_cpu_frequency).value_or(0.0) };
-                auto const performance{ read_counter(m_cpu_performance, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100).value_or(0.0) };
-                snapshot.cpu_mhz = frequency * performance / 100.0;
-                snapshot.disk_read = read_counter(m_disk_read).value_or(0.0);
-                snapshot.disk_write = read_counter(m_disk_write).value_or(0.0);
-                snapshot.disk_active = read_counter(m_disk_idle)
-                                           .transform([](double idle) { return std::clamp(100.0 - idle, 0.0, 100.0); })
-                                           .value_or(0.0);
+                auto const performance{ read_counter(m_cpu_performance, 0.0, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100) };
+                snapshot.cpu_mhz = read_counter(m_cpu_frequency) * performance / 100.0;
+                snapshot.disk_read = read_counter(m_disk_read);
+                snapshot.disk_write = read_counter(m_disk_write);
+                snapshot.disk_active = std::clamp(100.0 - read_counter(m_disk_idle, 100.0), 0.0, 100.0);
             }
 
         private:
             auto addCounter(std::wstring const& path) -> PDH_HCOUNTER {
                 PDH_HCOUNTER counter{ nullptr };
-                if (PdhAddEnglishCounterW(m_query, path.c_str(), 0, &counter) != ERROR_SUCCESS) {
+                if (PdhAddEnglishCounterW(m_query.get(), path.c_str(), 0, &counter) != ERROR_SUCCESS) {
                     return nullptr;
                 }
                 return counter;
@@ -304,19 +289,52 @@ namespace monitor {
             }
         };
 
+        class NetworkTracker {
+        private:
+            InterfaceTotals m_previous{ read_interfaces() };
+            std::chrono::steady_clock::time_point m_previous_time{ std::chrono::steady_clock::now() };
+
+        public:
+            auto Collect(Snapshot& snapshot) -> void {
+                auto const now{ std::chrono::steady_clock::now() };
+                auto const seconds{ std::chrono::duration<double>{ now - m_previous_time }.count() };
+                auto current{ read_interfaces() };
+                NetworkTotals delta{};
+                for (auto const& [luid, totals] : current) {
+                    if (auto const previous{ m_previous.find(luid) }; previous != m_previous.end()) {
+                        delta.received += counter_delta(previous->second.received, totals.received);
+                        delta.sent += counter_delta(previous->second.sent, totals.sent);
+                    }
+                }
+                m_previous = std::move(current);
+                m_previous_time = now;
+                snapshot.net_receive = static_cast<double>(delta.received) / seconds;
+                snapshot.net_send = static_cast<double>(delta.sent) / seconds;
+            }
+        };
+
         class ProcessTracker {
         private:
             std::vector<std::byte> m_buffer;
             std::unordered_map<std::uint32_t, CpuTimes> m_previous;
+            std::chrono::steady_clock::time_point m_previous_time;
+            int m_logical_cores{ count_logical_cores() };
 
         public:
-            auto Sample(double elapsed_seconds, int logical_cores) -> std::vector<ProcessUsage> {
+            ProcessTracker() : m_buffer(INITIAL_PROCESS_BUFFER) {
+                Snapshot baseline{};
+                Collect(baseline);
+            }
+
+            auto Collect(Snapshot& snapshot) -> void {
+                auto const now{ std::chrono::steady_clock::now() };
+                auto const budget{ std::chrono::duration<double>{ now - m_previous_time } * m_logical_cores };
+                m_previous_time = now;
                 if (!refresh()) {
-                    return {};
+                    return;
                 }
-                auto const budget{ elapsed_seconds * TICKS_PER_SECOND * logical_cores };
-                std::vector<ProcessUsage> processes;
                 std::unordered_map<std::uint32_t, CpuTimes> current;
+                current.reserve(m_previous.size());
                 std::size_t offset{ 0 };
                 while (true) {
                     auto const& entry{ *reinterpret_cast<ProcessEntry const*>(m_buffer.data() + offset) };
@@ -324,9 +342,9 @@ namespace monitor {
                     if (pid != 0) {
                         CpuTimes const times{
                             .created = entry.create_time.QuadPart,
-                            .used = entry.kernel_time.QuadPart + entry.user_time.QuadPart,
+                            .used = FileTime{ entry.kernel_time.QuadPart + entry.user_time.QuadPart },
                         };
-                        processes.push_back({
+                        snapshot.processes.push_back({
                             .pid = pid,
                             .name = to_utf8({ entry.image_name.Buffer, entry.image_name.Length / sizeof(wchar_t) }),
                             .cpu = cpuPercent(pid, times, budget),
@@ -342,14 +360,10 @@ namespace monitor {
                     offset += entry.next_entry_offset;
                 }
                 m_previous = std::move(current);
-                return processes;
             }
 
         private:
             auto refresh() -> bool {
-                if (m_buffer.empty()) {
-                    m_buffer.resize(INITIAL_PROCESS_BUFFER);
-                }
                 for (int attempt{ 0 }; attempt < PROCESS_QUERY_ATTEMPTS; ++attempt) {
                     ULONG needed{ 0 };
                     auto const status{ NtQuerySystemInformation(SystemProcessInformation, m_buffer.data(), static_cast<ULONG>(m_buffer.size()), &needed) };
@@ -364,12 +378,12 @@ namespace monitor {
                 return false;
             }
 
-            auto cpuPercent(std::uint32_t pid, CpuTimes const& times, double budget) const -> double {
+            auto cpuPercent(std::uint32_t pid, CpuTimes const& times, std::chrono::duration<double> budget) const -> double {
                 auto const previous{ m_previous.find(pid) };
                 if (previous == m_previous.end() || previous->second.created != times.created) {
                     return 0.0;
                 }
-                return std::clamp(static_cast<double>(times.used - previous->second.used) / budget * 100.0, 0.0, 100.0);
+                return std::clamp((times.used - previous->second.used) / budget * 100.0, 0.0, 100.0);
             }
         };
 
@@ -377,10 +391,8 @@ namespace monitor {
 
     struct Sampler::Impl {
         PerformanceCounters counters;
+        NetworkTracker network;
         ProcessTracker processes;
-        NetworkTotals network{ read_network_totals() };
-        std::chrono::steady_clock::time_point last_sample{ std::chrono::steady_clock::now() };
-        int logical_cores{ static_cast<int>(GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)) };
     };
 
     auto query_static_info() -> StaticInfo {
@@ -389,33 +401,23 @@ namespace monitor {
             .os_name = read_os_name(),
             .cpu_name = read_cpu_name(),
             .physical_cores = count_physical_cores(),
-            .logical_cores = static_cast<int>(GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)),
+            .logical_cores = count_logical_cores(),
         };
     }
 
-    Sampler::Sampler() : m_impl{ std::make_unique<Impl>() } {
-        m_impl->processes.Sample(1.0, m_impl->logical_cores);
-    }
+    Sampler::Sampler() : m_impl{ std::make_unique<Impl>() } {}
 
     Sampler::~Sampler() = default;
 
     auto Sampler::Sample() -> Snapshot {
-        auto const now{ std::chrono::steady_clock::now() };
-        auto const elapsed{ std::chrono::duration<double>{ now - m_impl->last_sample }.count() };
-        m_impl->last_sample = now;
-
-        Snapshot snapshot{};
-        snapshot.uptime = std::chrono::milliseconds{ static_cast<std::int64_t>(GetTickCount64()) };
+        Snapshot snapshot{
+            .uptime = std::chrono::milliseconds{ static_cast<std::int64_t>(GetTickCount64()) },
+            .drives = read_drives(),
+        };
         m_impl->counters.Collect(snapshot);
+        m_impl->network.Collect(snapshot);
+        m_impl->processes.Collect(snapshot);
         read_memory(snapshot);
-
-        auto const network{ read_network_totals() };
-        snapshot.net_receive = rate(m_impl->network.received, network.received, elapsed);
-        snapshot.net_send = rate(m_impl->network.sent, network.sent, elapsed);
-        m_impl->network = network;
-
-        snapshot.drives = read_drives();
-        snapshot.processes = m_impl->processes.Sample(elapsed, m_impl->logical_cores);
         return snapshot;
     }
 

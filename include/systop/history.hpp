@@ -5,17 +5,16 @@
 
 namespace monitor {
 
+    inline constexpr std::size_t HISTORY_CAPACITY{ 1024 };
+
     class History {
     private:
         std::deque<double> m_values;
-        std::size_t m_capacity;
 
     public:
-        explicit History(std::size_t capacity) : m_capacity{ capacity } {}
-
         auto Push(double value) -> void {
             m_values.push_back(value);
-            if (m_values.size() > m_capacity) {
+            if (m_values.size() > HISTORY_CAPACITY) {
                 m_values.pop_front();
             }
         }

@@ -1,12 +1,14 @@
-#include "monitor_view.hpp"
+#include "systop/monitor_view.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <format>
 #include <memory>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -19,8 +21,10 @@
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/box.hpp>
 #include <ftxui/screen/color.hpp>
+#include <ftxui/screen/terminal.hpp>
 
-#include "monitor_state.hpp"
+#include "systop/monitor_state.hpp"
+#include "systop/refresh_clock.hpp"
 
 using namespace ftxui;
 
@@ -88,7 +92,7 @@ namespace monitor {
 
         auto format_uptime(std::chrono::milliseconds uptime) -> std::string {
             auto const days{ std::chrono::floor<std::chrono::days>(uptime) };
-            std::chrono::hh_mm_ss const clock{ std::chrono::floor<std::chrono::seconds>(uptime - days) };
+            auto const clock{ std::chrono::floor<std::chrono::seconds>(uptime - days) };
             if (days.count() > 0) {
                 return std::format("{} 天 {:%T}", days.count(), clock);
             }
@@ -110,18 +114,20 @@ namespace monitor {
             return gauge(progress) | color(usage_color(percent)) | bgcolor(Color::Grey23);
         }
 
+        auto collecting() -> Element {
+            return text("正在采集…") | dim;
+        }
+
         auto history_graph(History const& history, double scale_floor) -> Element {
             return elastic_height(graph([&history, scale_floor](int width, int height) {
                 auto const& values{ history.Values() };
                 auto const count{ std::min(values.size(), static_cast<std::size_t>(width)) };
-                auto const first{ values.end() - static_cast<std::ptrdiff_t>(count) };
-                auto const peak{ count == 0 ? 0.0 : *std::max_element(first, values.end()) };
-                auto const scale{ std::max(scale_floor, peak) };
+                std::ranges::subrange const visible{ values.end() - static_cast<std::ptrdiff_t>(count), values.end() };
+                auto const scale{ std::ranges::fold_left(visible, scale_floor, [](double lhs, double rhs) { return std::max(lhs, rhs); }) };
 
                 std::vector<int> output(static_cast<std::size_t>(width), -1);
-                std::transform(first, values.end(), output.end() - static_cast<std::ptrdiff_t>(count), [scale, height](double value) {
-                    auto const level{ static_cast<int>(std::lround(std::clamp(value / scale, 0.0, 1.0) * height)) };
-                    return level == 0 ? -1 : level;
+                std::ranges::transform(visible, output.end() - static_cast<std::ptrdiff_t>(count), [scale, height](double value) {
+                    return static_cast<int>(std::lround(std::clamp(value / scale, 0.0, 1.0) * height)) - 1;
                 });
                 return output;
             }));
@@ -139,82 +145,78 @@ namespace monitor {
             return text(std::format("{:.1f}%", percent)) | color(usage_color(percent));
         }
 
-        auto right(Element content, int width) -> Element {
-            return hbox({ filler(), std::move(content) }) | size(WIDTH, EQUAL, width);
+        auto right_column(Element content, int width) -> Element {
+            return align_right(std::move(content)) | size(WIDTH, EQUAL, width);
         }
 
         auto core_cell(std::size_t index, double load) -> Element {
             return hbox({
-                       text(std::format("{:>3} ", index)) | dim,
-                       meter(load) | flex,
-                       text(std::format("{:>4.0f}%", load)),
-                   }) |
-                flex;
-        }
-
-        auto empty_core_cell() -> Element {
-            return hbox({ text("    "), text(" "), text("     ") }) | flex;
+                text(std::format("{:>3} ", index)) | dim,
+                meter(load),
+                text(std::format("{:>4.0f}%", load)),
+            }) | flex;
         }
 
         auto core_grid(std::vector<double> const& loads) -> Element {
             if (loads.empty()) {
-                return text("正在采集…") | dim;
+                return collecting();
             }
-            auto const columns{ std::clamp<std::size_t>((loads.size() + CORE_ROWS - 1) / CORE_ROWS, 1, MAX_CORE_COLUMNS) };
-            Elements rows;
-            for (std::size_t first{ 0 }; first < loads.size(); first += columns) {
-                Elements cells;
-                for (auto index{ first }; index < first + columns; ++index) {
-                    if (index > first) {
-                        cells.push_back(text("  "));
-                    }
-                    cells.push_back(index < loads.size() ? core_cell(index, loads[index]) : empty_core_cell());
+            auto const columns{ std::min((loads.size() + CORE_ROWS - 1) / CORE_ROWS, MAX_CORE_COLUMNS) };
+            std::vector<Elements> rows;
+            for (std::size_t index{ 0 }; index < loads.size(); ++index) {
+                if (index % columns == 0) {
+                    rows.emplace_back();
+                } else {
+                    rows.back().push_back(text("  "));
                 }
-                rows.push_back(hbox(std::move(cells)));
+                rows.back().push_back(core_cell(index, loads[index]));
             }
-            return vbox(std::move(rows));
+            return gridbox(std::move(rows));
         }
 
         auto cpu_panel(MonitorState const& state) -> Element {
             auto const& snapshot{ state.latest };
             auto const& info{ state.info };
-            auto summary{ hbox({
-                text(info.cpu_name) | dim | flex,
-                text(std::format(" {:.2f} GHz · {} 核 {} 线程", snapshot.cpu_mhz / 1000.0, info.physical_cores, info.logical_cores)),
+            auto content{ vbox({
+                hbox({
+                    text(info.cpu_name) | dim | flex,
+                    text(std::format(" {:.2f} GHz · {} 核 {} 线程", snapshot.cpu_mhz / 1000.0, info.physical_cores, info.logical_cores)),
+                }),
+                history_graph(state.cpu_history, 100.0) | color(Color::Cyan),
+                separator(),
+                core_grid(snapshot.cpu_cores),
             }) };
-            return window(title("CPU", percent_text(snapshot.cpu_total)), vbox({
-                                                                                std::move(summary),
-                                                                                history_graph(state.cpu_history, 100.0) | color(Color::Cyan) | flex,
-                                                                                separator(),
-                                                                                core_grid(snapshot.cpu_cores),
-                                                                            }));
+            return window(title("CPU", percent_text(snapshot.cpu_total)), std::move(content));
         }
 
         auto usage_row(std::string_view label, double percent, std::string detail) -> Element {
             return hbox({
                 text(label) | size(WIDTH, EQUAL, 5),
-                meter(percent) | flex,
+                meter(percent),
                 text(std::format(" {:>5.1f}%  ", percent)),
                 text(std::move(detail)) | dim,
             });
         }
 
+        auto byte_usage_row(std::string_view label, std::uint64_t used, std::uint64_t total) -> Element {
+            return usage_row(label, percent_of(used, total), std::format("{} / {}", format_bytes(used), format_bytes(total)));
+        }
+
         auto memory_panel(MonitorState const& state) -> Element {
             auto const& snapshot{ state.latest };
-            auto const used{ percent_of(snapshot.memory_used, snapshot.memory_total) };
-            auto const committed{ percent_of(snapshot.commit_used, snapshot.commit_limit) };
-            return window(title("内存", percent_text(used)), vbox({
-                                                                   history_graph(state.memory_history, 100.0) | color(Color::Magenta) | flex,
-                                                                   separator(),
-                                                                   usage_row("物理", used, std::format("{} / {}", format_bytes(snapshot.memory_used), format_bytes(snapshot.memory_total))),
-                                                                   usage_row("提交", committed, std::format("{} / {}", format_bytes(snapshot.commit_used), format_bytes(snapshot.commit_limit))),
-                                                                   hbox({
-                                                                       text("可用 ") | dim,
-                                                                       text(format_bytes(snapshot.memory_total - snapshot.memory_used)),
-                                                                       text("   缓存 ") | dim,
-                                                                       text(format_bytes(snapshot.system_cache)),
-                                                                   }),
-                                                               }));
+            auto content{ vbox({
+                history_graph(state.memory_history, 100.0) | color(Color::Magenta),
+                separator(),
+                byte_usage_row("物理", snapshot.memory_used, snapshot.memory_total),
+                byte_usage_row("提交", snapshot.commit_used, snapshot.commit_limit),
+                hbox({
+                    text("可用 ") | dim,
+                    text(format_bytes(snapshot.memory_total - snapshot.memory_used)),
+                    text("   缓存 ") | dim,
+                    text(format_bytes(snapshot.system_cache)),
+                }),
+            }) };
+            return window(title("内存", percent_text(percent_of(snapshot.memory_used, snapshot.memory_total))), std::move(content));
         }
 
         struct RateSeries {
@@ -226,10 +228,9 @@ namespace monitor {
 
         auto rate_series(RateSeries const& series) -> Element {
             return vbox({
-                       hbox({ text(series.label) | color(series.tint), filler(), text(format_rate(series.value)) | bold }),
-                       history_graph(series.history, RATE_SCALE_FLOOR) | color(series.tint) | flex,
-                   }) |
-                flex;
+                hbox({ text(series.label) | color(series.tint), filler(), text(format_rate(series.value)) | bold }),
+                history_graph(series.history, RATE_SCALE_FLOOR) | color(series.tint),
+            }) | flex;
         }
 
         auto rate_panel(Element panel_title, RateSeries const& upper, RateSeries const& lower) -> Element {
@@ -253,17 +254,10 @@ namespace monitor {
         auto drives_panel(MonitorState const& state) -> Element {
             Elements rows;
             for (auto const& drive : state.latest.drives) {
-                auto const used{ percent_of(drive.total - drive.free, drive.total) };
-                rows.push_back(hbox({
-                    text(drive.root) | bold,
-                    text(" "),
-                    meter(used) | flex,
-                    text(std::format(" {:>3.0f}%  ", used)),
-                    text(std::format("剩 {}", format_bytes(drive.free))) | dim,
-                }));
+                rows.push_back(usage_row(drive.root, percent_of(drive.total - drive.free, drive.total), std::format("剩 {}", format_bytes(drive.free))));
             }
             if (rows.empty()) {
-                rows.push_back(text("正在采集…") | dim);
+                rows.push_back(collecting());
             }
             return window(title("磁盘空间"), vbox(std::move(rows)) | yframe);
         }
@@ -272,22 +266,36 @@ namespace monitor {
             if (key != active) {
                 return text(label);
             }
-            auto const descending{ key == SortKey::Cpu || key == SortKey::Memory };
-            return text(std::format("{}{}", label, descending ? "▼" : "▲")) | color(Color::Cyan);
+            return text(std::format("{}{}", label, is_descending(key) ? "▼" : "▲")) | color(Color::Cyan);
+        }
+
+        auto reserve_scrollbar_column(Element content) -> Element {
+            return vscroll_indicator(std::move(content));
+        }
+
+        auto process_columns(
+            Element pid,
+            Element name,
+            Element cpu,
+            Element memory,
+            Element threads,
+            Element handles
+        ) -> Element {
+            return hbox({
+                right_column(std::move(pid), PID_WIDTH),
+                text("  "),
+                std::move(name) | flex,
+                right_column(std::move(cpu), CPU_WIDTH),
+                right_column(std::move(memory), MEMORY_WIDTH),
+                right_column(std::move(threads), THREAD_WIDTH),
+                right_column(std::move(handles), HANDLE_WIDTH),
+                text(" "),
+            });
         }
 
         auto process_header(SortKey active) -> Element {
-            return hbox({
-                       right(column_label("PID", SortKey::Pid, active), PID_WIDTH),
-                       text("  "),
-                       column_label("名称", SortKey::Name, active) | flex,
-                       right(column_label("CPU%", SortKey::Cpu, active), CPU_WIDTH),
-                       right(column_label("内存", SortKey::Memory, active), MEMORY_WIDTH),
-                       right(text("线程"), THREAD_WIDTH),
-                       right(text("句柄"), HANDLE_WIDTH),
-                       text("  "),
-                   }) |
-                bold | bgcolor(Color::Grey23);
+            auto columns{ process_columns(column_label("PID", SortKey::Pid, active), column_label("名称", SortKey::Name, active), column_label("CPU%", SortKey::Cpu, active), column_label("内存", SortKey::Memory, active), text("线程"), text("句柄")) };
+            return reserve_scrollbar_column(std::move(columns)) | bold | bgcolor(Color::Grey23);
         }
 
         auto process_row(ProcessUsage const& process) -> Element {
@@ -295,38 +303,41 @@ namespace monitor {
             if (process.cpu < 0.05) {
                 cpu = std::move(cpu) | dim;
             }
-            return hbox({
-                right(text(std::to_string(process.pid)), PID_WIDTH),
-                text("  "),
-                text(process.name) | flex,
-                right(std::move(cpu), CPU_WIDTH),
-                right(text(format_bytes(static_cast<double>(process.memory))), MEMORY_WIDTH),
-                right(text(std::to_string(process.threads)), THREAD_WIDTH),
-                right(text(std::to_string(process.handles)), HANDLE_WIDTH),
-                text(" "),
-            });
+            return process_columns(text(std::to_string(process.pid)), text(process.name), std::move(cpu), text(format_bytes(process.memory)), text(std::to_string(process.threads)), text(std::to_string(process.handles)));
         }
 
-        auto process_panel(MonitorState const& state, Box& list_box) -> Element {
-            auto const& snapshot{ state.latest };
+        auto process_rows(MonitorState const& state) -> Element {
+            auto const& processes{ state.latest.processes };
+            auto const count{ static_cast<int>(processes.size()) };
+            auto const reach{ Terminal::Size().dimy };
+            auto const first{ std::max(0, state.selected - reach) };
+            auto const last{ std::min(count, state.selected + reach + 1) };
+
             Elements rows;
-            rows.reserve(snapshot.processes.size());
-            for (std::size_t index{ 0 }; index < snapshot.processes.size(); ++index) {
-                auto row{ process_row(snapshot.processes[index]) };
-                if (static_cast<int>(index) == state.selected) {
+            rows.push_back(emptyElement() | size(HEIGHT, EQUAL, first));
+            for (auto index{ first }; index < last; ++index) {
+                auto row{ process_row(processes[static_cast<std::size_t>(index)]) };
+                if (index == state.selected) {
                     row = std::move(row) | inverted | focus;
                 }
                 rows.push_back(std::move(row));
             }
-            auto summary{ text(std::format("共 {} · 线程 {} · 句柄 {}", snapshot.process_count, snapshot.thread_count, snapshot.handle_count)) | dim };
-            return window(title("进程", std::move(summary)), vbox({
-                                                                   process_header(state.sort_key),
-                                                                   elastic_height(vbox(std::move(rows)) | vscroll_indicator | yframe) | reflect(list_box),
-                                                               }));
+            rows.push_back(emptyElement() | size(HEIGHT, EQUAL, count - last));
+            return vbox(std::move(rows));
         }
 
-        auto header_bar(MonitorState const& state) -> Element {
-            std::chrono::zoned_time const now{ std::chrono::current_zone(), std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()) };
+        auto process_panel(MonitorState const& state, Box& list_box) -> Element {
+            auto const& snapshot{ state.latest };
+            auto summary{ text(std::format("共 {} · 线程 {} · 句柄 {}", snapshot.process_count, snapshot.thread_count, snapshot.handle_count)) | dim };
+            auto content{ vbox({
+                process_header(state.sort_key),
+                elastic_height(process_rows(state) | vscroll_indicator | yframe) | reflect(list_box),
+            }) };
+            return window(title("进程", std::move(summary)), std::move(content));
+        }
+
+        auto header_bar(MonitorState const& state, std::chrono::time_zone const* zone) -> Element {
+            std::chrono::zoned_time const now{ zone, std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()) };
             return hbox({
                 text(" 系统资源监控 ") | bold | color(Color::Cyan),
                 text("│") | dim,
@@ -338,13 +349,12 @@ namespace monitor {
             });
         }
 
-        auto footer_bar(MonitorState const& state) -> Element {
-            auto const interval{ std::chrono::duration<double>{ state.Interval() }.count() };
+        auto footer_bar(MonitorState const& state, RefreshClock const& clock) -> Element {
             return hbox({
                 text(" ↑↓ PgUp PgDn Home End 选择 · c/m/n/i 按 CPU/内存/名称/PID 排序 · 空格 暂停 · +/- 刷新间隔 · q 退出") | dim | xflex_shrink,
                 filler(),
-                state.paused ? text(" 已暂停 ") | bold | color(Color::Black) | bgcolor(Color::Yellow) : text(""),
-                text(std::format(" 刷新 {}s ", interval)),
+                state.paused ? text(" 已暂停 ") | bold | color(Color::Black) | bgcolor(Color::Yellow) : emptyElement(),
+                text(std::format(" 刷新 {} ", std::chrono::duration<double>{ clock.Interval() })),
             });
         }
 
@@ -374,23 +384,21 @@ namespace monitor {
 
     } // namespace
 
-    auto make_monitor(MonitorState& state, Closure quit) -> Component {
+    auto make_monitor(MonitorState& state, RefreshClock& clock, Closure quit) -> Component {
         auto list_box{ std::make_shared<Box>() };
+        auto const* const zone{ std::chrono::current_zone() };
 
-        auto view{ Renderer([&state, list_box] {
+        auto view{ Renderer([&state, &clock, list_box, zone] {
             return vbox({
-                header_bar(state),
+                header_bar(state, zone),
                 hbox({ cpu_panel(state) | xflex_factor(3, 1), memory_panel(state) | xflex_factor(2, 1) }) | flex,
                 hbox({ network_panel(state) | flex, disk_io_panel(state) | flex, drives_panel(state) | flex }) | flex,
                 process_panel(state, *list_box) | yflex_factor(2, 1),
-                footer_bar(state),
+                footer_bar(state, clock),
             });
         }) };
 
-        return CatchEvent(view, [&state, list_box, quit = std::move(quit)](Event event) {
-            if (event == Event::Custom) {
-                return true;
-            }
+        return CatchEvent(view, [&state, &clock, list_box, quit = std::move(quit)](Event event) {
             if (event == Event::Escape || event == Event::Character('q')) {
                 quit();
                 return true;
@@ -400,11 +408,11 @@ namespace monitor {
                 return true;
             }
             if (event == Event::Character('+') || event == Event::Character('=')) {
-                state.ChangeInterval(1);
+                clock.Step(1);
                 return true;
             }
             if (event == Event::Character('-')) {
-                state.ChangeInterval(-1);
+                clock.Step(-1);
                 return true;
             }
             for (auto const& [hotkey, key] : SORT_HOTKEYS) {

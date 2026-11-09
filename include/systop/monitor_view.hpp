@@ -6,7 +6,8 @@
 namespace monitor {
 
     struct MonitorState;
+    class RefreshClock;
 
-    [[nodiscard]] auto make_monitor(MonitorState& state, ftxui::Closure quit) -> ftxui::Component;
+    [[nodiscard]] auto make_monitor(MonitorState& state, RefreshClock& clock, ftxui::Closure quit) -> ftxui::Component;
 
 } // namespace monitor
