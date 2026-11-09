@@ -7,10 +7,10 @@
 #include <ftxui/component/app.hpp>
 #include <ftxui/component/event.hpp>
 
-#include "systop/monitor_state.hpp"
-#include "systop/monitor_view.hpp"
-#include "systop/refresh_clock.hpp"
-#include "systop/sampler.hpp"
+#include "systop/core/monitor_state.hpp"
+#include "systop/core/refresh_clock.hpp"
+#include "systop/core/sampler.hpp"
+#include "systop/ui/monitor_view.hpp"
 
 namespace {
 

@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <optional>
 
-#include "systop/history.hpp"
-#include "systop/sampler.hpp"
+#include "systop/core/history.hpp"
+#include "systop/core/sampler.hpp"
 
 namespace monitor {
 

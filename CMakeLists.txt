@@ -16,10 +16,10 @@ FetchContent_MakeAvailable(ftxui)
 
 add_executable(${PROJECT_NAME}
     src/main.cpp
-    src/monitor_state.cpp
-    src/monitor_view.cpp
-    src/refresh_clock.cpp
-    src/sampler.cpp
+    src/core/monitor_state.cpp
+    src/core/refresh_clock.cpp
+    src/core/sampler.cpp
+    src/ui/monitor_view.cpp
 )
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(${PROJECT_NAME} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

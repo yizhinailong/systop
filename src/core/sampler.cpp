@@ -1,4 +1,4 @@
-#include "systop/sampler.hpp"
+#include "systop/core/sampler.hpp"
 
 #include <winsock2.h>
 #include <ws2ipdef.h>

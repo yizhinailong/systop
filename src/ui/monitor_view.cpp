@@ -1,4 +1,4 @@
-#include "systop/monitor_view.hpp"
+#include "systop/ui/monitor_view.hpp"
 
 #include <algorithm>
 #include <array>
@@ -23,8 +23,8 @@
 #include <ftxui/screen/color.hpp>
 #include <ftxui/screen/terminal.hpp>
 
-#include "systop/monitor_state.hpp"
-#include "systop/refresh_clock.hpp"
+#include "systop/core/monitor_state.hpp"
+#include "systop/core/refresh_clock.hpp"
 
 using namespace ftxui;
 
