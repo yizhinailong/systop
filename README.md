@@ -23,8 +23,9 @@ CPU 占用优先读取 `% Processor Utility`，不可用时退回 `% Processor T
 
 ## 安装
 
-从 [Releases](https://github.com/yizhinailong/systop/releases) 下载 `systop-<版本>-windows-x64.zip`，
-解压后运行 `systop.exe`。压缩包已附带所需的 MSVC 运行时 DLL。
+从 [Releases](https://github.com/yizhinailong/systop/releases) 下载 `systop-<版本>-windows-x64.exe` 直接运行。
+它静态链接了 C/C++ 运行时，只依赖 Windows 自带的 DLL，不需要安装 VC++ 运行库。
+同一版本的 `systop-<版本>-windows-x64.zip` 装有同一个程序以及 LICENSE 和 README。
 
 界面文字为简体中文，需要支持 Unicode 的终端，例如 Windows Terminal。
 
@@ -79,7 +80,8 @@ mcpp run -- --sort memory
 mcpp test --timeout 90
 ```
 
-`mcpp pack --release` 在 `target/dist/` 下生成附带 MSVC 运行时 DLL 的发布包，内容与 Release 中的压缩包相同。
+`mcpp pack --release` 在 `target/dist/` 下生成发布用的压缩包。[mcpp.toml](mcpp.toml) 设置了
+`cxx_runtime = "self-contained"`，以静态 CRT（`/MT`）链接程序和测试，所以 `systop.exe` 不带运行时 DLL 也能运行。
 
 依赖版本以 [mcpp.toml](mcpp.toml) 为准，由 mcpp 解析和管理：
 

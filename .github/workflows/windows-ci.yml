@@ -123,11 +123,30 @@ jobs:
               throw 'mcpp pack did not produce the expected archive.'
           }
 
+          $unpacked = Join-Path $env:RUNNER_TEMP 'systop-package'
+          Expand-Archive -LiteralPath $archive -DestinationPath $unpacked -Force
+          $programs = @(Get-ChildItem -LiteralPath $unpacked -Recurse -File -Filter 'systop.exe')
+          if ($programs.Count -ne 1) {
+              throw "Expected one systop.exe in the archive, found $($programs.Count)."
+          }
+          # cxx_runtime = "self-contained" links the CRT statically, so the program must run without DLLs beside it.
+          $imports = dumpbin /nologo /dependents $programs[0].FullName
+          if ($LASTEXITCODE -ne 0) {
+              throw "dumpbin failed with exit code $LASTEXITCODE."
+          }
+          $runtime = @($imports | Select-String -Pattern '^\s*(vcruntime|msvcp|concrt|ucrtbase|api-ms-win-crt-)')
+          if ($runtime.Count -gt 0) {
+              throw "systop.exe imports the MSVC runtime: $(($runtime | ForEach-Object { $_.Line.Trim() }) -join ', ')"
+          }
+          Copy-Item -LiteralPath $programs[0].FullName -Destination (Join-Path $env:RUNNER_TEMP "systop-$version-windows-x64.exe")
+
       - name: Upload package
         if: github.ref_type == 'tag'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: systop-windows-x64
-          path: ${{ runner.temp }}/systop-*-windows-x64.zip
+          path: |
+            ${{ runner.temp }}/systop-*-windows-x64.zip
+            ${{ runner.temp }}/systop-*-windows-x64.exe
           if-no-files-found: error
           retention-days: 7

@@ -7,6 +7,7 @@ platforms = ["windows"]
 
 [build]
 defines = ["NOMINMAX", "WIN32_LEAN_AND_MEAN"]
+cxx_runtime = "self-contained"
 
 [runtime]
 libraries = ["advapi32", "pdh", "iphlpapi", "ntdll"]
