@@ -12,3 +12,6 @@ libraries = ["advapi32", "pdh", "iphlpapi", "ntdll"]
 
 [dependencies.compat]
 ftxui = "7.0.3"
+
+[dev-dependencies]
+mtest = "0.5.1"
