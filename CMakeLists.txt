@@ -12,6 +12,7 @@ FetchContent_Declare(ftxui
     GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI
     GIT_TAG v7.0.3
 )
+set(FTXUI_ENABLE_INSTALL OFF)
 FetchContent_MakeAvailable(ftxui)
 
 add_executable(${PROJECT_NAME}
@@ -28,3 +29,5 @@ target_link_libraries(${PROJECT_NAME} PRIVATE ftxui::ftxui advapi32 pdh iphlpapi
 if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
 endif()
+
+install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION .)
