@@ -5,3 +5,4 @@ export import :monitor_state;
 export import :monitor_view;
 export import :refresh_clock;
 export import :sampler;
+export import :version;

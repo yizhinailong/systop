@@ -1,0 +1,47 @@
+import std;
+import mcpp;
+
+namespace {
+
+    auto version_module(std::string_view version) -> std::string {
+        return std::format(
+            "export module systop:version;\n"
+            "import std;\n"
+            "export namespace monitor {{\n"
+            "    inline constexpr std::string_view VERSION{{ {:?} }};\n"
+            "}} // namespace monitor\n",
+            version
+        );
+    }
+
+    auto read_file(std::filesystem::path const& path) -> std::string {
+        std::ifstream file{ path, std::ios::binary };
+        return { std::istreambuf_iterator<char>{ file }, std::istreambuf_iterator<char>{} };
+    }
+
+    auto write_if_changed(std::filesystem::path const& path, std::string_view text) -> bool {
+        if (read_file(path) == text) {
+            return true;
+        }
+        std::ofstream file{ path, std::ios::binary | std::ios::trunc };
+        file << text;
+        return static_cast<bool>(file);
+    }
+
+} // namespace
+
+auto main() -> int {
+    std::string_view const version{ mcpp::package_version() };
+    if (version.empty()) {
+        std::println(std::cerr, "systop: mcpp did not report [package] version; mcpp 2026.9.11.1 or newer is required");
+        return 1;
+    }
+
+    auto const path{ std::filesystem::path{ mcpp::out_dir() } / "version.cppm" };
+    if (!write_if_changed(path, version_module(version))) {
+        std::println(std::cerr, "systop: cannot write {}", path.string());
+        return 1;
+    }
+    mcpp::generated(path.string().c_str());
+    return 0;
+}
