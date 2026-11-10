@@ -1,2 +1,5 @@
-build/
-publish/
+target/
+.mcpp/
+.cache/
+compile_commands.json
+mcpp.lock

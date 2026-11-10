@@ -1,0 +1,16 @@
+[package]
+name = "systop"
+version = "0.1.0"
+description = "Terminal resource monitor for Windows"
+platforms = ["windows"]
+
+[build]
+include_dirs = ["include"]
+defines = ["NOMINMAX", "WIN32_LEAN_AND_MEAN"]
+compile_commands = "compile_commands.json"
+
+[runtime]
+libraries = ["advapi32", "pdh", "iphlpapi", "ntdll"]
+
+[dependencies.compat]
+ftxui = "7.0.3"
