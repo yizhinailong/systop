@@ -1,0 +1,133 @@
+name: Windows CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Windows x64 build and test
+    if: ${{ !github.event.deleted }}
+    runs-on: windows-2025
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python for TOML parsing
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+
+      - name: Verify tag matches package version
+        if: github.ref_type == 'tag'
+        shell: python
+        run: |
+          import os
+          import tomllib
+
+          with open("mcpp.toml", "rb") as manifest:
+              version = tomllib.load(manifest)["package"]["version"]
+          expected = f"v{version}"
+          actual = os.environ["GITHUB_REF_NAME"]
+          if actual != expected:
+              raise ValueError(f"Tag {actual} must match package version {expected}")
+          print(f"Verified {actual} matches [package].version.")
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: amd64
+
+      - name: Install mcpp
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $mcppVersion = '2026.11.9.1'
+          $mcppSha256 = '99c902d5df2ff728a0a8b707a0db5b137fd884dbb2a4f6a151aa20386530b95b'
+          $archiveName = "mcpp-$mcppVersion-windows-x86_64"
+          $archivePath = Join-Path $env:RUNNER_TEMP "$archiveName.zip"
+          $installRoot = Join-Path $env:RUNNER_TEMP $archiveName
+
+          Invoke-WebRequest -Uri "https://github.com/mcpp-community/mcpp/releases/download/v$mcppVersion/$archiveName.zip" -OutFile $archivePath
+          if ((Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -ne $mcppSha256) {
+              throw 'The mcpp release archive checksum does not match.'
+          }
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $env:RUNNER_TEMP -Force
+
+          $mcppBin = Join-Path $installRoot 'bin'
+          $mcppExe = Join-Path $mcppBin 'mcpp.exe'
+          if (!(Test-Path -LiteralPath $mcppExe)) {
+              throw 'The mcpp release archive does not contain bin/mcpp.exe.'
+          }
+          # Keep the bundled registry/bin/xlings.exe in this isolated MCPP_HOME.
+          $env:MCPP_HOME = $installRoot
+          $env:PATH = "$mcppBin;$env:PATH"
+          "MCPP_HOME=$installRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $mcppBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $mcppExe --version
+          if ($LASTEXITCODE -ne 0) {
+              throw "mcpp --version failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Install LLVM toolchain
+        run: mcpp toolchain install llvm 23.1.3
+
+      - name: Select LLVM toolchain
+        run: mcpp toolchain default llvm@23.1.3
+
+      - name: Build
+        run: mcpp build
+
+      - name: Verify systop reports the package version
+        shell: python
+        run: |
+          import subprocess
+          import tomllib
+
+          with open("mcpp.toml", "rb") as manifest:
+              expected = tomllib.load(manifest)["package"]["version"]
+          # mcpp writes build progress to stderr, so stdout holds only the program output.
+          actual = subprocess.run(["mcpp", "run", "--", "--version"], check=True,
+                                  stdout=subprocess.PIPE, text=True, timeout=300).stdout.strip()
+          if actual != expected:
+              raise ValueError(f"systop --version printed {actual!r}, expected {expected!r}")
+          print(f"Verified systop --version reports {actual}.")
+
+      - name: Test
+        run: mcpp test --timeout 90
+
+      - name: Package release
+        if: github.ref_type == 'tag'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $archive = Join-Path $env:RUNNER_TEMP "systop-$version-windows-x64.zip"
+          mcpp pack --release -o $archive
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $archive)) {
+              throw 'mcpp pack did not produce the expected archive.'
+          }
+
+      - name: Upload package
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: systop-windows-x64
+          path: ${{ runner.temp }}/systop-*-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 7
