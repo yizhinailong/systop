@@ -1,6 +1,6 @@
 [package]
 name = "systop"
-version = "0.1.0"
+version = "0.1.1"
 description = "Terminal resource monitor for Windows"
 license = "MIT"
 platforms = ["windows"]
