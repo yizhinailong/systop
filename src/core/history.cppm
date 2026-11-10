@@ -1,9 +1,8 @@
-#pragma once
+export module systop:history;
 
-#include <cstddef>
-#include <deque>
+import std;
 
-namespace monitor {
+export namespace monitor {
 
     inline constexpr std::size_t HISTORY_CAPACITY{ 1024 };
 

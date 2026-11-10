@@ -1,30 +1,27 @@
-#include "systop/ui/monitor_view.hpp"
-
-#include <algorithm>
-#include <array>
-#include <chrono>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <format>
-#include <memory>
-#include <ranges>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
+module;
 
 #include <ftxui/component/component.hpp>
+#include <ftxui/component/component_base.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/mouse.hpp>
+#include <ftxui/component/task.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/box.hpp>
 #include <ftxui/screen/color.hpp>
 #include <ftxui/screen/terminal.hpp>
 
-#include "systop/core/monitor_state.hpp"
-#include "systop/core/refresh_clock.hpp"
+export module systop:monitor_view;
+
+import :monitor_state;
+import :refresh_clock;
+import std;
+
+export namespace monitor {
+
+    [[nodiscard]] auto make_monitor(MonitorState& state, RefreshClock& clock, ftxui::Closure quit) -> ftxui::Component;
+
+} // namespace monitor
 
 using namespace ftxui;
 

@@ -1,16 +1,8 @@
-#include <chrono>
-#include <memory>
-#include <stop_token>
-#include <thread>
-#include <utility>
-
 #include <ftxui/component/app.hpp>
 #include <ftxui/component/event.hpp>
 
-#include "systop/core/monitor_state.hpp"
-#include "systop/core/refresh_clock.hpp"
-#include "systop/core/sampler.hpp"
-#include "systop/ui/monitor_view.hpp"
+import std;
+import systop;
 
 namespace {
 

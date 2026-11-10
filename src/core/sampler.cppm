@@ -1,4 +1,4 @@
-#include "systop/core/sampler.hpp"
+module;
 
 #include <winsock2.h>
 #include <ws2ipdef.h>
@@ -7,26 +7,80 @@
 #include <psapi.h>
 #include <winternl.h>
 
-#include <algorithm>
-#include <array>
-#include <chrono>
 #include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <cwchar>
-#include <format>
-#include <memory>
-#include <ratio>
-#include <span>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <utility>
-#include <vector>
+
+export module systop:sampler;
+
+import std;
+
+export namespace monitor {
+
+    struct StaticInfo {
+        std::string host_name;
+        std::string os_name;
+        std::string cpu_name;
+        int physical_cores{ 0 };
+        int logical_cores{ 0 };
+    };
+
+    struct DriveUsage {
+        std::string root;
+        std::uint64_t total{ 0 };
+        std::uint64_t free{ 0 };
+    };
+
+    struct ProcessUsage {
+        std::uint32_t pid{ 0 };
+        std::string name;
+        double cpu{ 0.0 };
+        std::uint64_t memory{ 0 };
+        std::uint32_t threads{ 0 };
+        std::uint32_t handles{ 0 };
+    };
+
+    struct Snapshot {
+        std::chrono::milliseconds uptime{};
+        double cpu_total{ 0.0 };
+        std::vector<double> cpu_cores;
+        double cpu_mhz{ 0.0 };
+        std::uint64_t memory_total{ 0 };
+        std::uint64_t memory_used{ 0 };
+        std::uint64_t commit_limit{ 0 };
+        std::uint64_t commit_used{ 0 };
+        std::uint64_t system_cache{ 0 };
+        std::uint32_t process_count{ 0 };
+        std::uint32_t thread_count{ 0 };
+        std::uint32_t handle_count{ 0 };
+        double net_receive{ 0.0 };
+        double net_send{ 0.0 };
+        double disk_read{ 0.0 };
+        double disk_write{ 0.0 };
+        double disk_active{ 0.0 };
+        std::vector<DriveUsage> drives;
+        std::vector<ProcessUsage> processes;
+    };
+
+    [[nodiscard]] auto query_static_info() -> StaticInfo;
+
+    class Sampler {
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> m_impl;
+
+    public:
+        Sampler();
+        ~Sampler();
+        Sampler(Sampler const&) = delete;
+        auto operator=(Sampler const&) -> Sampler& = delete;
+
+        [[nodiscard]] auto Sample() -> Snapshot;
+    };
+
+} // namespace monitor
 
 namespace monitor {
 
-    namespace {
+    namespace detail {
 
         using FileTime = std::chrono::duration<std::int64_t, std::ratio<1, 10'000'000>>;
 
@@ -387,21 +441,21 @@ namespace monitor {
             }
         };
 
-    } // namespace
+    } // namespace detail
 
     struct Sampler::Impl {
-        PerformanceCounters counters;
-        NetworkTracker network;
-        ProcessTracker processes;
+        detail::PerformanceCounters counters;
+        detail::NetworkTracker network;
+        detail::ProcessTracker processes;
     };
 
     auto query_static_info() -> StaticInfo {
         return {
-            .host_name = read_host_name(),
-            .os_name = read_os_name(),
-            .cpu_name = read_cpu_name(),
-            .physical_cores = count_physical_cores(),
-            .logical_cores = count_logical_cores(),
+            .host_name = detail::read_host_name(),
+            .os_name = detail::read_os_name(),
+            .cpu_name = detail::read_cpu_name(),
+            .physical_cores = detail::count_physical_cores(),
+            .logical_cores = detail::count_logical_cores(),
         };
     }
 
@@ -412,12 +466,12 @@ namespace monitor {
     auto Sampler::Sample() -> Snapshot {
         Snapshot snapshot{
             .uptime = std::chrono::milliseconds{ static_cast<std::int64_t>(GetTickCount64()) },
-            .drives = read_drives(),
+            .drives = detail::read_drives(),
         };
         m_impl->counters.Collect(snapshot);
         m_impl->network.Collect(snapshot);
         m_impl->processes.Collect(snapshot);
-        read_memory(snapshot);
+        detail::read_memory(snapshot);
         return snapshot;
     }
 
