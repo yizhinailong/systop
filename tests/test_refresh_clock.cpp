@@ -38,6 +38,16 @@ namespace {
         "starts at one second"_test = [] {
             expect(eq(monitor::RefreshClock{}.Interval(), 1000ms));
         };
+        "starts at a requested preset"_test = [] {
+            for (auto const interval : monitor::REFRESH_INTERVALS) {
+                expect(eq(monitor::RefreshClock{ interval }.Interval(), interval));
+            }
+        };
+        "snaps other intervals to the nearest preset"_test = [] {
+            expect(eq(monitor::RefreshClock{ 0ms }.Interval(), 500ms));
+            expect(eq(monitor::RefreshClock{ 3000ms }.Interval(), 2000ms));
+            expect(eq(monitor::RefreshClock{ 1h }.Interval(), 5000ms));
+        };
         "moves one interval per step"_test = [] {
             monitor::RefreshClock clock;
             clock.Step(1);
