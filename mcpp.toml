@@ -2,6 +2,7 @@
 name = "systop"
 version = "0.1.0"
 description = "Terminal resource monitor for Windows"
+license = "MIT"
 platforms = ["windows"]
 
 [build]
