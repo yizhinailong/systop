@@ -10,6 +10,9 @@ defines = ["NOMINMAX", "WIN32_LEAN_AND_MEAN"]
 [runtime]
 libraries = ["advapi32", "pdh", "iphlpapi", "ntdll"]
 
+[dependencies]
+cmdline = "0.0.2"
+
 [dependencies.compat]
 ftxui = "7.0.3"
 

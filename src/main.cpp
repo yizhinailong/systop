@@ -10,9 +10,18 @@ namespace {
 
 } // namespace
 
-auto main() -> int {
-    monitor::MonitorState state{ .info = monitor::query_static_info() };
-    monitor::RefreshClock clock{};
+auto main(int argc, char* argv[]) -> int {
+    std::vector<std::string> const args(argv, argv + argc);
+    auto const options{ monitor::parse_command_line(args) };
+    if (!options) {
+        if (auto const& message{ options.error().message }; !message.empty()) {
+            std::println(std::cerr, "systop: {}\nTry 'systop --help' for more information.", message);
+        }
+        return options.error().code;
+    }
+
+    monitor::MonitorState state{ .info = monitor::query_static_info(), .sort_key = options->sort_key };
+    monitor::RefreshClock clock{ options->interval };
     auto app{ ftxui::App::Fullscreen() };
     auto root{ monitor::make_monitor(state, clock, app.ExitLoopClosure()) };
 
