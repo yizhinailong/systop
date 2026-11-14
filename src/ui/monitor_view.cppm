@@ -1,17 +1,6 @@
-module;
-
-#include <ftxui/component/component.hpp>
-#include <ftxui/component/component_base.hpp>
-#include <ftxui/component/event.hpp>
-#include <ftxui/component/mouse.hpp>
-#include <ftxui/component/task.hpp>
-#include <ftxui/dom/elements.hpp>
-#include <ftxui/dom/node.hpp>
-#include <ftxui/screen/box.hpp>
-#include <ftxui/screen/color.hpp>
-#include <ftxui/screen/terminal.hpp>
-
 export module systop:monitor_view;
+
+export import ftxui;
 
 import :monitor_state;
 import :refresh_clock;
@@ -68,6 +57,46 @@ namespace monitor {
 
         auto elastic_height(Element child) -> Element {
             return std::make_shared<ElasticHeight>(std::move(child));
+        }
+
+        class FlexFactor : public Node {
+        public:
+            FlexFactor(
+                Element child,
+                bool horizontal,
+                int grow,
+                int shrink
+            ) : Node{ Elements{ std::move(child) } }, horizontal_{ horizontal }, grow_{ grow }, shrink_{ shrink } {}
+
+            auto ComputeRequirement() -> void override {
+                Node::ComputeRequirement();
+                auto& grow{ horizontal_ ? requirement_.flex_grow_x : requirement_.flex_grow_y };
+                auto& shrink{ horizontal_ ? requirement_.flex_shrink_x : requirement_.flex_shrink_y };
+                grow = grow_;
+                shrink = shrink_;
+            }
+
+            auto SetBox(Box box) -> void override {
+                Node::SetBox(box);
+                children_.front()->SetBox(box);
+            }
+
+        private:
+            bool horizontal_;
+            int grow_;
+            int shrink_;
+        };
+
+        auto xflex_factor(int grow, int shrink) -> Decorator {
+            return [grow, shrink](Element child) {
+                return std::make_shared<FlexFactor>(std::move(child), true, grow, shrink);
+            };
+        }
+
+        auto yflex_factor(int grow, int shrink) -> Decorator {
+            return [grow, shrink](Element child) {
+                return std::make_shared<FlexFactor>(std::move(child), false, grow, shrink);
+            };
         }
 
         auto format_bytes(double bytes) -> std::string {

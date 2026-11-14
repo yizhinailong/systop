@@ -1,7 +1,5 @@
-#include <ftxui/component/app.hpp>
-#include <ftxui/component/event.hpp>
-
 import std;
+import ftxui;
 import systop;
 
 namespace {

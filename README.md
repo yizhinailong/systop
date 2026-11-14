@@ -87,9 +87,11 @@ mcpp test --timeout 90
 
 | 依赖               | 版本    | 用途                          |
 | ------------------ | ------- | ----------------------------- |
-| `compat.ftxui`     | `7.0.3` | 终端界面                      |
+| `compat.ftxui`     | `7.0.3` | 终端界面（`import ftxui;`）   |
 | `mcpplibs.cmdline` | `0.0.2` | 命令行选项解析                |
 | `mcpplibs.mtest`   | `0.5.1` | 单元测试，仅 `mcpp test` 使用 |
+
+FTXUI 通过 `compat.ftxui` 的 `modules` 特性以命名模块引入，源码中不再包含它的头文件。
 
 程序还链接 Windows 自带的 `advapi32`（注册表）、`pdh`（性能计数器）、`iphlpapi`（网卡统计）
 和 `ntdll`（进程列表）。

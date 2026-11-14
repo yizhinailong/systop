@@ -16,7 +16,7 @@ libraries = ["advapi32", "pdh", "iphlpapi", "ntdll"]
 cmdline = "0.0.2"
 
 [dependencies.compat]
-ftxui = "7.0.3"
+ftxui = { version = "7.0.3", features = ["modules"] }
 
 [dev-dependencies]
 mtest = "0.5.1"

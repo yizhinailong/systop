@@ -1,10 +1,5 @@
-#include <ftxui/component/component_base.hpp>
-#include <ftxui/component/event.hpp>
-#include <ftxui/component/mouse.hpp>
-#include <ftxui/dom/node.hpp>
-#include <ftxui/screen/screen.hpp>
-
 import std;
+import ftxui;
 import mcpplibs.mtest;
 import systop;
 
