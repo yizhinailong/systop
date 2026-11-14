@@ -51,7 +51,7 @@ jobs:
           print(f"Verified {actual} matches [package].version.")
 
       - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        uses: step-security/msvc-dev-cmd@22c98154b708dbd743e6f27a933cf6ceba3305c4 # v1.13.1
         with:
           arch: amd64
 
